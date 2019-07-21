@@ -123,17 +123,37 @@ func main() {
 			log.Fatal("Unsupported File:", path)
 		}
 
-		mesh := joygo.Mesh{
+		mesh := &joygo.Mesh{
 			Name:     name,
 			Vertices: vertices,
 			Vertex:   vertex,
 			Normal:   normal,
 			TexCoord: texCoord,
 		}
-		log.Println(proto.MarshalTextString(&mesh))
+		if len(os.Args) > 3 {
+			file, err := os.OpenFile(os.Args[3], os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer file.Close()
+			size := uint64(proto.Size(mesh))
+			data, err := proto.Marshal(mesh)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if _, err := file.Write(proto.EncodeVarint(size)); err != nil {
+				log.Fatal(err)
+			}
+			if _, err := file.Write(data); err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			log.Println(proto.MarshalTextString(mesh))
+		}
 	} else {
 		log.Println("Joy Mesh Usage:")
-		log.Println("\tjoymesh <mesh-name> <file-path>")
+		log.Println("\tjoymesh <mesh-name> <input-file> (write to stdout)")
+		log.Println("\tjoymesh <mesh-name> <input-file> <output-file>")
 	}
 }
 
