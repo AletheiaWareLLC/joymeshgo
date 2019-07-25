@@ -21,6 +21,7 @@ import (
 	"github.com/AletheiaWareLLC/joygo"
 	"github.com/golang/protobuf/proto"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -28,17 +29,18 @@ import (
 
 var vertices uint32
 var vertex []float64
-var normal []float64
-var texCoord []float64
+var vertexNormal []float64
+var textureCoordinate []float64
 
+var tempFace [][3]int
 var tempVertex [][]float64
 var tempNormal [][]float64
-var tempTexCoord [][]float64
+var tempTextureCoordinate [][]float64
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	if len(os.Args) > 2 {
-		// TODO read .obj or .off file, create Mesh and write to stdout
+		// Reads .obj or .off files, creates Mesh and writes to stdout or output file
 		// filename.obj or filename.off
 		name := os.Args[1]
 		path := os.Args[2]
@@ -67,7 +69,7 @@ func main() {
 				case "vn":
 					tempNormal = append(tempNormal, stringsToFloats(parts[1:4]...))
 				case "vt":
-					tempTexCoord = append(tempTexCoord, stringsToFloats(parts[1:4]...))
+					tempTextureCoordinate = append(tempTextureCoordinate, stringsToFloats(parts[1:4]...))
 				case "f":
 					if len(parts) > 4 {
 						// Convert Quad to Triangles
@@ -84,13 +86,19 @@ func main() {
 				}
 			}
 		} else if strings.HasSuffix(path, ".off") {
+			scanner.Scan()
 			line := scanner.Text()
-			if line != "OFF" {
+			if !strings.HasPrefix(line, "OFF") {
 				log.Fatal("Invalid OFF file")
 			}
+			log.Println(line)
+			parts := strings.Fields(line)
 			vertexCount := -1
 			faceCount := -1
-			log.Println(line)
+			if len(parts) > 2 {
+				vertexCount = stringToInt(parts[1])
+				faceCount = stringToInt(parts[2])
+			}
 			for scanner.Scan() {
 				line := scanner.Text()
 				if line == "" || strings.HasPrefix(line, "#") {
@@ -105,10 +113,12 @@ func main() {
 						tempVertex = append(tempVertex, stringsToFloats(parts[0:3]...))
 						vertexCount--
 					} else if faceCount > 0 {
-						if parts[0] == "4" {
-							// Convert Quad to Triangles
-							addOffFace(parts[1:4]...)
-							addOffFace(parts[3], parts[4], parts[1])
+						count := stringToInt(parts[0])
+						if count > 3 {
+							// Convert Polygon to Triangles
+							for i := 1; i < count-1; i++ {
+								addOffFace(parts[1], parts[i+1], parts[i+2])
+							}
 						} else {
 							// Handle triangle
 							addOffFace(parts[1:4]...)
@@ -119,6 +129,7 @@ func main() {
 					}
 				}
 			}
+			calculateOffNormals(vertexCount)
 		} else {
 			log.Fatal("Unsupported File:", path)
 		}
@@ -127,8 +138,8 @@ func main() {
 			Name:     name,
 			Vertices: vertices,
 			Vertex:   vertex,
-			Normal:   normal,
-			TexCoord: texCoord,
+			Normal:   vertexNormal,
+			TexCoord: textureCoordinate,
 		}
 		if len(os.Args) > 3 {
 			file, err := os.OpenFile(os.Args[3], os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
@@ -172,36 +183,96 @@ func addObjFace(ss ...string) {
 		vertex = append(vertex, tempVertex[vi]...)
 		vertices++
 		if len(index) > 1 && index[1] != "" {
-			ti := objIndexToArrayIndex(stringToInt(index[1]), len(tempTexCoord))
-			texCoord = append(texCoord, tempTexCoord[ti]...)
+			ti := objIndexToArrayIndex(stringToInt(index[1]), len(tempTextureCoordinate))
+			textureCoordinate = append(textureCoordinate, tempTextureCoordinate[ti]...)
 		}
 		if len(index) > 2 && index[2] != "" {
 			ni := objIndexToArrayIndex(stringToInt(index[2]), len(tempNormal))
-			normal = append(normal, tempNormal[ni]...)
+			vertexNormal = append(vertexNormal, tempNormal[ni]...)
 		}
 	}
 }
 
 func addOffFace(ss ...string) {
-	var face [3][]float64
+	var face [3]int
+	var vs [3][]float64
 	for i := 0; i < 3; i++ {
-		index := stringToInt(ss[i])
-		face[i] = tempVertex[index]
-		vertex = append(vertex, face[i]...)
+		face[i] = stringToInt(ss[i])
+		vs[i] = tempVertex[face[i]]
+		vertex = append(vertex, vs[i]...)
 		vertices++
 	}
-	n := calculateNormal(face[0], face[1], face[2])
-	for i := 0; i < 3; i++ {
-		normal = append(normal, n...)
+	tempFace = append(tempFace, face)
+	// calculate face edges
+	e0 := [3]float64{
+		vs[1][0] - vs[0][0],
+		vs[1][1] - vs[0][1],
+		vs[1][2] - vs[0][2],
 	}
+	e1 := [3]float64{
+		vs[2][0] - vs[0][0],
+		vs[2][1] - vs[0][1],
+		vs[2][2] - vs[0][2],
+	}
+	// calculate face normal
+	n0 := e0[1]*e1[2] - e0[2]*e1[1]
+	n1 := e0[2]*e1[0] - e0[0]*e1[2]
+	n2 := e0[0]*e1[1] - e0[1]*e1[0]
+	// normalize face normal
+	length := math.Sqrt((n0 * n0) + (n1 * n1) + (n2 * n2))
+	if length > 0 {
+		n0 = n0 / length
+		n1 = n1 / length
+		n2 = n2 / length
+	}
+	n := []float64{
+		n0,
+		n1,
+		n2,
+	}
+	tempNormal = append(tempNormal, n)
 }
 
-func calculateNormal(v1, v2, v3 []float64) []float64 {
-	var normal []float64
-	// TODO var u [3]float64
-	// TODO var v [3]float64
-	// TODO
-	return normal
+func calculateOffNormals(vertexCount int) {
+	if os.Getenv("NORMALS") == "smooth" {
+		log.Println("Calculating smooth normals")
+		vns := make(map[int][]float64, vertexCount)
+		// Loop once to add face normals to vertex normals
+		for f, face := range tempFace {
+			fn := tempNormal[f]
+			for i := 0; i < 3; i++ {
+				vn := vns[face[i]]
+				if vn == nil {
+					vn = []float64{0, 0, 0}
+				}
+				vn[0] += fn[0]
+				vn[1] += fn[1]
+				vn[2] += fn[2]
+				vns[face[i]] = vn
+			}
+		}
+		// Loop again to add tempVertexNormals to vertexNormal
+		for _, face := range tempFace {
+			for i := 0; i < 3; i++ {
+				vn := vns[face[i]]
+				// Normalize normal
+				length := math.Sqrt((vn[0] * vn[0]) + (vn[1] * vn[1]) + (vn[2] * vn[2]))
+				if length > 0 {
+					vn[0] /= length
+					vn[1] /= length
+					vn[2] /= length
+				}
+				vertexNormal = append(vertexNormal, vn...)
+			}
+		}
+	} else {
+		for _, temp := range tempNormal {
+			// Add once for each vertex
+			for i := 0; i < 3; i++ {
+				vertexNormal = append(vertexNormal, temp...)
+			}
+		}
+	}
 }
 
 func stringToInt(s string) int {
